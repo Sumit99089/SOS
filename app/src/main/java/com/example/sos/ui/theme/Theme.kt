@@ -38,7 +38,7 @@ private val DarkColors = darkColorScheme(
 )
 
 @Composable
-fun SOSAppTheme(
+fun SOSTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {

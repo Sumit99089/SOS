@@ -1,26 +1,25 @@
 package com.example.sos
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
-import android.window.SplashScreen
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.core.app.ActivityCompat
-import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.sos.service.SOSService
+import com.example.sos.ui.screens.HomeScreen
+import com.example.sos.ui.screens.RegistrationScreen
+import com.example.sos.ui.screens.SplashScreen
 import com.example.sos.ui.theme.SOSTheme
 import com.example.sos.util.PreferencesManager
 
@@ -28,6 +27,7 @@ import com.example.sos.util.PreferencesManager
 class MainActivity : ComponentActivity() {
     private lateinit var preferencesManager: PreferencesManager
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -54,17 +54,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPermissions() {
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.POST_NOTIFICATIONS
-            ),
-            100
-        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ),
+                100
+            )
+        }
     }
 }
 
@@ -112,21 +114,3 @@ fun AppNavigation(preferencesManager: PreferencesManager) {
     }
 }
 
-@Composable
-fun HomeScreen(navController: NavHostController, preferencesManager: PreferencesManager) {
-    TODO("Not yet implemented")
-}
-
-@Composable
-fun RegistrationScreen(navigateToHome: () -> Unit, preferencesManager: PreferencesManager) {
-    TODO("Not yet implemented")
-}
-
-@Composable
-fun SplashScreen(
-    navigateToRegistration: () -> Unit,
-    navigateToHome: () -> Unit,
-    preferencesManager: PreferencesManager
-) {
-    TODO("Not yet implemented")
-}

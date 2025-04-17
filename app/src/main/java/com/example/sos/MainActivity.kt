@@ -1,6 +1,7 @@
 package com.example.sos
 
 
+import android.app.Application
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,7 +15,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Intent(this, PowerButtonService::class.java).also { startService(it) }
+        val serviceIntent = Intent(application, PowerButtonService::class.java)
+        application.startService(serviceIntent)
         setContent {
             SOSTheme {
                 SosNavHost()

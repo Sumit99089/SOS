@@ -1,6 +1,10 @@
 package com.example.sos.network
 
 
+import com.example.sos.network.model.LoginRequest
+import com.example.sos.network.model.LoginResponse
+import com.example.sos.network.model.RegisterRequest
+import com.example.sos.network.model.SosRequest
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.POST

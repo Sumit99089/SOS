@@ -28,7 +28,11 @@ class PowerButtonService: Service() {
             val now = System.currentTimeMillis()
             if (now - lastTime <= 5000) count++ else count = 1
             lastTime = now
-            if (count >= 5) triggerSos()
+            if (count == 5) {
+                Log.d("From Service", "Service has been fired")
+                triggerSos()
+                count = 0
+            }
         }
     }
 

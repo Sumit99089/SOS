@@ -107,6 +107,62 @@ class PowerButtonService : Service() {
         return true // Replace with actual permission check
     }
 
+    // Add this new method to PowerButtonService.kt
+    private fun showSosTriggeredNotification() {
+        // Create an emergency notification channel with higher priority
+        val emergencyChannelId = "SosEmergencyChannel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = "SOS Emergency Alerts"
+            val desc = "High priority alerts when SOS is triggered"
+            val importance = NotificationManager.IMPORTANCE_HIGH
+            val channel = NotificationChannel(emergencyChannelId, name, importance).apply {
+                description = desc
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                enableVibration(true)
+                enableLights(true)
+            }
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        // Create intent to open app when notification is tapped
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            action = "com.example.sos.SOS_TRIGGERED"
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            contentIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Build the emergency notification
+        val notification = NotificationCompat.Builder(this, emergencyChannelId)
+            .setContentTitle("SOS Alert Triggered")
+            .setContentText("Emergency services have been notified. Tap to open app.")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setContentIntent(contentPendingIntent)
+            .setFullScreenIntent(contentPendingIntent, true)  // This helps appear on lock screen
+            .setAutoCancel(true)
+            .setOngoing(true)  // Makes notification persistent
+            .addAction(
+                android.R.drawable.ic_menu_view,
+                "Open App",
+                contentPendingIntent
+            )
+            .build()
+
+        // Show the notification
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(911, notification)  // Use unique ID for emergency notification
+    }
+
+    // Modify the triggerSos method to use the new notification approach
     private fun triggerSos() {
         Log.d("PowerButtonService", "Attempting to get location and send SOS")
         try {
@@ -118,6 +174,21 @@ class PowerButtonService : Service() {
                         try {
                             userRepo.sendSos(loc.latitude, loc.longitude)
                             Log.d("PowerButtonService", "SOS sent successfully")
+
+                            // Show emergency notification that will work on lock screen
+                            showSosTriggeredNotification()
+
+                            // Also try to open app directly if device is not locked
+                            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                            if (!keyguardManager.isKeyguardLocked) {
+                                CoroutineScope(Dispatchers.Main).launch {
+                                    val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        action = "com.example.sos.SOS_TRIGGERED"
+                                    }
+                                    startActivity(launchIntent)
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.e("PowerButtonService", "Error sending SOS", e)
                         }

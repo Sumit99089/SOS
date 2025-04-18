@@ -40,6 +40,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Check if app was opened due to SOS trigger
+        if (intent?.action == "com.example.sos.SOS_TRIGGERED") {
+            // Handle SOS triggered opening - could navigate to a specific screen or show a dialog
+            Log.d("MainActivity", "App opened from SOS trigger notification")
+            // You might want to navigate to a specific screen or show additional information
+        }
+
         checkAndRequestPermissions()
 
         setContent {
@@ -48,7 +55,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     private fun checkAndRequestPermissions() {
         val permissionsToRequest = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED

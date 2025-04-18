@@ -29,18 +29,21 @@ class PowerButtonService : Service() {
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val now = System.currentTimeMillis()
-            if (now - lastTime <= 5000) count++ else count = 1
-            lastTime = now
-            Log.d("PowerButtonService", "Power button pressed, count: $count")
-            if (count == 5) {
-                Log.d("PowerButtonService", "SOS trigger detected!")
-                if (hasLocationPermissions()) {
-                    triggerSos()
-                } else {
-                    Log.e("PowerButtonService", "Cannot send SOS - missing location permissions")
+            // Check if it's the power button press event
+            if (intent?.action == Intent.ACTION_SCREEN_ON || intent?.action == Intent.ACTION_SCREEN_OFF) {
+                val now = System.currentTimeMillis()
+                if (now - lastTime <= 5000) count++ else count = 1
+                lastTime = now
+                Log.d("PowerButtonService", "Power button pressed, count: $count")
+                if (count == 5) {
+                    Log.d("PowerButtonService", "SOS trigger detected!")
+                    if (hasLocationPermissions()) {
+                        triggerSos()
+                    } else {
+                        Log.e("PowerButtonService", "Cannot send SOS - missing location permissions")
+                    }
+                    count = 0
                 }
-                count = 0
             }
         }
     }
@@ -50,7 +53,13 @@ class PowerButtonService : Service() {
         Log.d("PowerButtonService", "Service created")
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
-        registerReceiver(receiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+
+        // Register for both screen on and off events to detect power button presses
+        val intentFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        registerReceiver(receiver, intentFilter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -66,7 +75,29 @@ class PowerButtonService : Service() {
         } catch (e: Exception) {
             Log.e("PowerButtonService", "Error unregistering receiver", e)
         }
+
+        // Request restart if service is killed
+        val restartServiceIntent = Intent(applicationContext, PowerButtonService::class.java)
+        restartServiceIntent.setPackage(packageName)
+        startService(restartServiceIntent)
+
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.d("PowerButtonService", "Task removed")
+        // Request restart if the app is removed from recents
+        val restartServiceIntent = Intent(applicationContext, PowerButtonService::class.java)
+        restartServiceIntent.setPackage(packageName)
+        val pendingIntent = PendingIntent.getService(
+            this, 1, restartServiceIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
+        )
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, pendingIntent)
+
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

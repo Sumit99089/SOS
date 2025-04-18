@@ -9,7 +9,7 @@ import com.example.sos.ui.screens.*
 @Composable
 fun SosNavHost() {
     val navController = rememberNavController()
-    NavHost(navController, startDestination = "login") {
+    NavHost(navController, startDestination = "home") {
         composable("login") { LoginScreen(navController) }
         composable("register_email") { RegisterEmailScreen(navController) }
         composable("register_name") { RegisterNameScreen(navController) }

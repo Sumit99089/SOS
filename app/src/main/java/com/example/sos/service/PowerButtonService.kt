@@ -50,9 +50,18 @@ class PowerButtonService : Service() {
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF -> handlePowerButtonPress()
-                ACTION_CANCEL_SOS -> cancelSosCountdown()
+            val action = intent?.action
+            Log.d("PowerButtonService", "Received action: $action")
+
+            when (action) {
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF -> {
+                    Log.d("PowerButtonService", "Screen state changed")
+                    handlePowerButtonPress()
+                }
+                ACTION_CANCEL_SOS -> {
+                    Log.d("PowerButtonService", "Cancel SOS action received")
+                    cancelSosCountdown()
+                }
             }
         }
 
@@ -61,8 +70,13 @@ class PowerButtonService : Service() {
             count = if (now - lastTime <= 5000) count + 1 else 1
             lastTime = now
 
+            Log.d("PowerButtonService", "Power button press detected, count: $count")
+
             if (count == 5) {
                 Log.d("PowerButtonService", "SOS trigger detected!")
+                // Reset count immediately to prevent multiple triggers
+                count = 0
+
                 if (hasLocationPermissions()) {
                     if (isLocationEnabled()) {
                         checkLocationSettings()
@@ -73,7 +87,6 @@ class PowerButtonService : Service() {
                 } else {
                     Log.e("PowerButtonService", "Missing location permissions")
                 }
-                count = 0
             }
         }
     }
@@ -203,6 +216,7 @@ class PowerButtonService : Service() {
 
     private fun prepareAndStartSosCountdown() {
         // First, your own helper (e.g. prompts if needed)
+        Log.d("PowerButtonService", "Preparing to start SOS countdown")
         if (!hasLocationPermissions()) {
             Log.e("PowerButtonService", "Location permissions not granted")
             startSosCountdown()
@@ -290,6 +304,7 @@ class PowerButtonService : Service() {
         }
     }
     private fun cleanupLocationUpdates() {
+        Log.d("PowerButtonService", "Cleaning up location updates")
         locationCallback?.let {
             LocationServices.getFusedLocationProviderClient(this).removeLocationUpdates(it)
             locationCallback = null
@@ -297,9 +312,9 @@ class PowerButtonService : Service() {
     }
 
     private fun startSosCountdown() {
-        cancelSosCountdown() // Cancel any existing countdown
+//        cancelSosCountdown() // Cancel any existing countdown
 
-        showCountdownNotification(10) // Initial 10-second countdown
+        showCountdownNotification(20) // Initial 10-second countdown
 
         sosCountdownTimer = object : CountDownTimer(COUNTDOWN_DURATION, COUNTDOWN_INTERVAL) {
             override fun onTick(millisUntilFinished: Long) {
@@ -314,6 +329,7 @@ class PowerButtonService : Service() {
     }
 
     private fun cancelSosCountdown() {
+        Log.d("cancelsos", "cancelSosCountdown")
         sosCountdownTimer?.cancel()
         sosCountdownTimer = null
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)

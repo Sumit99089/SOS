@@ -13,6 +13,13 @@ import androidx.core.content.ContextCompat
 import com.example.sos.service.PowerButtonService
 import com.example.sos.ui.navigation.SosNavHost
 import com.example.sos.ui.theme.SOSTheme
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.Priority
+import android.app.Activity
+import android.content.IntentSender
+import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
 
 class MainActivity : ComponentActivity() {
 
@@ -41,10 +48,32 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Check if app was opened due to SOS trigger
-        if (intent?.action == "com.example.sos.SOS_TRIGGERED") {
-            // Handle SOS triggered opening - could navigate to a specific screen or show a dialog
-            Log.d("MainActivity", "App opened from SOS trigger notification")
-            // You might want to navigate to a specific screen or show additional information
+        if (intent?.action == "com.example.sos.ACTION_LOCATION_SETTINGS") {
+            // Show location settings dialog
+            val locationRequest = LocationRequest.Builder(
+                Priority.PRIORITY_HIGH_ACCURACY, 10000L // 10 seconds interval
+            ).build()
+
+            val builder = LocationSettingsRequest.Builder()
+                .addLocationRequest(locationRequest)
+
+            val client = LocationServices.getSettingsClient(this)
+            val task = client.checkLocationSettings(builder.build())
+
+            task.addOnFailureListener { exception ->
+                if (exception is ResolvableApiException) {
+                    try {
+                        val activity = this as? Activity
+                        activity?.let {
+                            exception.startResolutionForResult(it, 1001)
+                        } ?: run {
+                            Log.e("MainActivity", "Context is not an Activity")
+                        }
+                    } catch (e: IntentSender.SendIntentException) {
+                        Log.e("MainActivity", "Error showing location settings dialog", e)
+                    }
+                }
+            }
         }
 
         checkAndRequestPermissions()
@@ -70,10 +99,6 @@ class MainActivity : ComponentActivity() {
     private fun startForegroundService() {
         Log.d("MainActivity", "Starting foreground service")
         val serviceIntent = Intent(application, PowerButtonService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        startForegroundService(serviceIntent)
     }
 }

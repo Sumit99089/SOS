@@ -1,23 +1,31 @@
 package com.example.sos.service
 
+import android.os.Build
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.location.Location
-import android.os.Build
-import android.os.CountDownTimer
-import android.os.IBinder
+import android.location.LocationManager
+import android.media.AudioAttributes
+import android.os.*
+import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.sos.MainActivity
 import com.example.sos.R
 import com.example.sos.repository.UserRepository
-import com.google.android.gms.location.LocationServices
+import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class PowerButtonService : Service() {
@@ -29,38 +37,43 @@ class PowerButtonService : Service() {
     private val SOS_NOTIFICATION_ID = 911
     private val COUNTDOWN_CHANNEL_ID = "SosCountdownChannel"
 
-    // Track if SOS countdown is in progress
+    // Location tracking
     private var sosCountdownTimer: CountDownTimer? = null
     private var sosLocation: Location? = null
+    private var locationCallback: LocationCallback? = null
 
     companion object {
         const val ACTION_CANCEL_SOS = "com.example.sos.action.CANCEL_SOS"
-        const val COUNTDOWN_DURATION = 20000L // 10 seconds
-        const val COUNTDOWN_INTERVAL = 1000L // 1 second for updates
+        const val COUNTDOWN_DURATION = 20000L // 20 seconds
+        const val COUNTDOWN_INTERVAL = 1000L // 1 second updates
     }
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            // Check if it's the power button press event
-            if (intent?.action == Intent.ACTION_SCREEN_ON || intent?.action == Intent.ACTION_SCREEN_OFF) {
-                val now = System.currentTimeMillis()
-                if (now - lastTime <= 5000) count++ else count = 1
-                lastTime = now
-                Log.d("PowerButtonService", "Power button pressed, count: $count")
-                if (count == 5) {
-                    Log.d("PowerButtonService", "SOS trigger detected!")
-                    if (hasLocationPermissions()) {
-                        prepareAndStartSosCountdown()
-                    } else {
-                        Log.e("PowerButtonService", "Cannot send SOS - missing location permissions")
-                    }
-                    count = 0
-                }
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_SCREEN_OFF -> handlePowerButtonPress()
+                ACTION_CANCEL_SOS -> cancelSosCountdown()
             }
-            // Check if it's the cancel SOS action
-            else if (intent?.action == ACTION_CANCEL_SOS) {
-                Log.d("PowerButtonService", "SOS cancelled by user")
-                cancelSosCountdown()
+        }
+
+        private fun handlePowerButtonPress() {
+            val now = System.currentTimeMillis()
+            count = if (now - lastTime <= 5000) count + 1 else 1
+            lastTime = now
+
+            if (count == 5) {
+                Log.d("PowerButtonService", "SOS trigger detected!")
+                if (hasLocationPermissions()) {
+                    if (isLocationEnabled()) {
+                        checkLocationSettings()
+                    } else {
+                        Log.e("PowerButtonService", "Location providers disabled")
+                        startSosCountdown()
+                    }
+                } else {
+                    Log.e("PowerButtonService", "Missing location permissions")
+                }
+                count = 0
             }
         }
     }
@@ -68,12 +81,40 @@ class PowerButtonService : Service() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate() {
         super.onCreate()
-        Log.d("PowerButtonService", "Service created")
-        createNotificationChannel()
-        createCountdownNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
+        initializeService()
+    }
 
-        // Register for both screen on and off events to detect power button presses
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun initializeService() {
+        Log.d("PowerButtonService", "Service created")
+        createNotificationChannels()
+        startForeground(NOTIFICATION_ID, createServiceNotification())
+        registerPowerButtonReceiver()
+    }
+
+    private fun createNotificationChannels() {
+        createNotificationChannel(
+            CHANNEL_ID,
+            "SOS Service",
+            "Keeps the SOS service running",
+            NotificationManager.IMPORTANCE_LOW
+        )
+
+        createNotificationChannel(
+            COUNTDOWN_CHANNEL_ID,
+            "SOS Countdown",
+            "Countdown for SOS trigger",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            setShowBadge(true)
+            enableVibration(true)
+            enableLights(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun registerPowerButtonReceiver() {
         val intentFilter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -83,106 +124,190 @@ class PowerButtonService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("PowerButtonService", "Service started")
         if (intent?.action == ACTION_CANCEL_SOS) {
             cancelSosCountdown()
         }
-        // Return START_STICKY to indicate that the system should recreate the service if killed
         return START_STICKY
     }
 
     override fun onDestroy() {
-        Log.d("PowerButtonService", "Service destroyed")
-        try {
-            unregisterReceiver(receiver)
-        } catch (e: Exception) {
-            Log.e("PowerButtonService", "Error unregistering receiver", e)
-        }
-
-        // Cancel countdown timer if active
-        sosCountdownTimer?.cancel()
-
-        // Request restart if service is killed
-        val restartServiceIntent = Intent(applicationContext, PowerButtonService::class.java)
-        restartServiceIntent.setPackage(packageName)
-        startService(restartServiceIntent)
-
+        cleanupResources()
+        restartServiceIfNeeded()
         super.onDestroy()
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d("PowerButtonService", "Task removed")
-        // Request restart if the app is removed from recents
-        val restartServiceIntent = Intent(applicationContext, PowerButtonService::class.java)
-        restartServiceIntent.setPackage(packageName)
-        val pendingIntent = PendingIntent.getService(
-            this, 1, restartServiceIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
-        )
-
-        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-        alarmManager.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, pendingIntent)
-
-        super.onTaskRemoved(rootIntent)
+    private fun cleanupResources() {
+        try {
+            unregisterReceiver(receiver)
+            locationCallback?.let {
+                LocationServices.getFusedLocationProviderClient(this).removeLocationUpdates(it)
+            }
+            sosCountdownTimer?.cancel()
+        } catch (e: Exception) {
+            Log.e("PowerButtonService", "Error during cleanup", e)
+        }
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    private fun restartServiceIfNeeded() {
+        val restartIntent = Intent(applicationContext, PowerButtonService::class.java).apply {
+            setPackage(packageName)
+        }
+        startService(restartIntent)
+    }
 
+    /* Location and SOS Functions */
     private fun hasLocationPermissions(): Boolean {
-        // Check if we have the necessary permissions
-        return true // Replace with actual permission check
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun isLocationEnabled(): Boolean {
+        val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
+        return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    private fun checkLocationSettings() {
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            1000
+        ).apply {
+            setWaitForAccurateLocation(true)
+            setMinUpdateIntervalMillis(5000)
+            setMaxUpdates(1)
+        }.build()
+
+        val builder = LocationSettingsRequest.Builder()
+            .addLocationRequest(locationRequest)
+
+        LocationServices.getSettingsClient(this)
+            .checkLocationSettings(builder.build())
+            .addOnSuccessListener { prepareAndStartSosCountdown() }
+            .addOnFailureListener { exception ->
+                if (exception is ResolvableApiException) {
+                    try {
+                        startActivity(Intent(this, MainActivity::class.java).apply {
+                            action = "com.example.sos.ACTION_LOCATION_SETTINGS"
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        })
+                    } catch (e: Exception) {
+                        Log.e("PowerButtonService", "Error opening settings", e)
+                        startSosCountdown()
+                    }
+                } else {
+                    Log.e("PowerButtonService", "Location settings inadequate", exception)
+                    startSosCountdown()
+                }
+            }
     }
 
     private fun prepareAndStartSosCountdown() {
-        Log.d("PowerButtonService", "Preparing SOS countdown")
+        // First, your own helper (e.g. prompts if needed)
+        if (!hasLocationPermissions()) {
+            Log.e("PowerButtonService", "Location permissions not granted")
+            startSosCountdown()
+            return
+        }
+
+        // Obtain the FusedLocationProviderClient
+        val fusedClient = LocationServices.getFusedLocationProviderClient(this)
+
         try {
-            val fusedClient = LocationServices.getFusedLocationProviderClient(this)
-            fusedClient.lastLocation.addOnSuccessListener { loc: Location? ->
-                if (loc != null) {
-                    sosLocation = loc
-                    Log.d("PowerButtonService", "Location obtained: ${loc.latitude}, ${loc.longitude}")
-                    startSosCountdown()
-                } else {
-                    Log.e("PowerButtonService", "Location is null")
-                    // Handle case where location is null - maybe start countdown anyway
+            // Runtime permission check so Lint is satisfied
+            val fineOK = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            val coarseOK = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!fineOK && !coarseOK) {
+                Log.e("PowerButtonService", "Location permissions missing at runtime")
+                startSosCountdown()
+                return
+            }
+
+            // Build a single-update, high-accuracy request
+            val locationRequest = LocationRequest.Builder(
+                Priority.PRIORITY_HIGH_ACCURACY, 1_000L
+            )
+                .setMaxUpdates(1)
+                .build()
+
+            // Callback to capture the incoming location
+            locationCallback = object : LocationCallback() {
+                override fun onLocationResult(locationResult: LocationResult) {
+                    cleanupLocationUpdates()
+                    locationResult.locations.firstOrNull()?.let { loc ->
+                        sosLocation = loc
+                        Log.d(
+                            "PowerButtonService",
+                            "Location obtained via callback: ${loc.latitude}, ${loc.longitude}"
+                        )
+                    }
                     startSosCountdown()
                 }
-            }.addOnFailureListener { e ->
-                Log.e("PowerButtonService", "Failed to get location", e)
-                // Start countdown even if we couldn't get location
-                startSosCountdown()
             }
+
+            // Start the request
+            @SuppressLint("MissingPermission") // we’ve just checked above
+            fusedClient.requestLocationUpdates(
+                locationRequest,
+                locationCallback!!,
+                Looper.getMainLooper()
+            )
+
+            // Backup: pull last known location if callback is delayed
+            @SuppressLint("MissingPermission")
+            fusedClient.lastLocation
+                .addOnSuccessListener { location ->
+                    location?.takeIf { sosLocation == null }?.also { loc ->
+                        sosLocation = loc
+                        Log.d(
+                            "PowerButtonService",
+                            "Last location fallback: ${loc.latitude}, ${loc.longitude}"
+                        )
+                    }
+                }
+
+            // Timeout in case no update arrives
+            Handler(Looper.getMainLooper()).postDelayed({
+                cleanupLocationUpdates()
+                if (sosLocation == null) {
+                    Log.d("PowerButtonService", "Location timeout")
+                }
+                startSosCountdown()
+            }, 5_000L)
+
         } catch (e: SecurityException) {
-            Log.e("PowerButtonService", "Security exception when accessing location", e)
-            // Start countdown even with error
+            // In the unlikely event of a permission slip
+            Log.e("PowerButtonService", "SecurityException fetching location", e)
             startSosCountdown()
         } catch (e: Exception) {
-            Log.e("PowerButtonService", "Unexpected error", e)
+            // Any other failures
+            Log.e("PowerButtonService", "Location error", e)
             startSosCountdown()
+        }
+    }
+    private fun cleanupLocationUpdates() {
+        locationCallback?.let {
+            LocationServices.getFusedLocationProviderClient(this).removeLocationUpdates(it)
+            locationCallback = null
         }
     }
 
     private fun startSosCountdown() {
-        Log.d("PowerButtonService", "Starting SOS countdown timer")
+        cancelSosCountdown() // Cancel any existing countdown
 
-        // Cancel any existing countdown
-        cancelSosCountdown()
+        showCountdownNotification(10) // Initial 10-second countdown
 
-        // Create the notification with a progress bar at 100% (10 seconds)
-        showCountdownNotification(10)
-
-        // Create and start a new countdown timer
         sosCountdownTimer = object : CountDownTimer(COUNTDOWN_DURATION, COUNTDOWN_INTERVAL) {
             override fun onTick(millisUntilFinished: Long) {
-                val secondsRemaining = (millisUntilFinished / 1000).toInt()
-                Log.d("PowerButtonService", "SOS countdown: $secondsRemaining seconds remaining")
-                // Update the existing notification to show progress
-                showCountdownNotification(secondsRemaining)
+                val seconds = (millisUntilFinished / 1000).toInt()
+                showCountdownNotification(seconds)
             }
 
             override fun onFinish() {
-                Log.d("PowerButtonService", "SOS countdown finished, sending SOS")
-                // Timer finished without cancellation, send the SOS
                 sendSosToServer()
             }
         }.start()
@@ -191,109 +316,85 @@ class PowerButtonService : Service() {
     private fun cancelSosCountdown() {
         sosCountdownTimer?.cancel()
         sosCountdownTimer = null
-
-        // Remove the countdown notification
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(SOS_NOTIFICATION_ID)
-
-        // Let the user know SOS was cancelled
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(SOS_NOTIFICATION_ID)
         showSosCancelledNotification()
     }
 
     private fun sendSosToServer() {
-        Log.d("PowerButtonService", "Sending SOS to server")
-        sosLocation?.let { loc ->
+        sosLocation?.let { location ->
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    userRepo.sendSos(loc.latitude, loc.longitude)
-                    Log.d("PowerButtonService", "SOS sent successfully")
-
-                    // Show emergency notification that will work on lock screen
+                    userRepo.sendSos(location.latitude, location.longitude)
                     showSosTriggeredNotification()
-
-                    // Also try to open app directly if device is not locked
-                    val keyguardManager = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
-                    if (!keyguardManager.isKeyguardLocked) {
-                        CoroutineScope(Dispatchers.Main).launch {
-                            val launchIntent = Intent(applicationContext, MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                action = "com.example.sos.SOS_TRIGGERED"
-                            }
-                            startActivity(launchIntent)
-                        }
-                    }
+                    openAppIfUnlocked()
                 } catch (e: Exception) {
-                    Log.e("PowerButtonService", "Error sending SOS", e)
+                    Log.e("PowerButtonService", "Failed to send SOS", e)
                 }
             }
-        } ?: run {
-            Log.e("PowerButtonService", "Cannot send SOS - location is null")
+        } ?: Log.e("PowerButtonService", "No location available")
+    }
+
+    private fun openAppIfUnlocked() {
+        if (!(getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked) {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                action = "com.example.sos.SOS_TRIGGERED"
+            })
         }
     }
 
-    private fun createCountdownNotificationChannel() {
-        val name = "SOS Countdown"
-        val descriptionText = "Countdown for SOS trigger"
-        val importance = NotificationManager.IMPORTANCE_HIGH
-        val channel = NotificationChannel(COUNTDOWN_CHANNEL_ID, name, importance).apply {
-            description = descriptionText
-            setShowBadge(true)
-            enableVibration(true)
-            enableLights(true)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+    /* Notification Helpers */
+    private fun createNotificationChannel(
+        channelId: String,
+        name: String,
+        description: String,
+        importance: Int
+    ): NotificationChannel {
+        return NotificationChannel(channelId, name, importance).apply {
+            this.description = description
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(this)
         }
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(channel)
+    }
+
+    private fun createServiceNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("SOS Service Running")
+            .setContentText("Press power button 5 times quickly to send SOS")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(PendingIntent.getActivity(
+                this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            ))
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
     }
 
     private fun showCountdownNotification(secondsRemaining: Int) {
-        // 1. Intent for WHEN USER TAPS NOTIFICATION - opens app
-        val contentIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val contentPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            contentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // 2. Intent for CANCEL ACTION - triggers service
-        val cancelIntent = Intent(this, PowerButtonService::class.java).apply {
-            action = ACTION_CANCEL_SOS
-        }
-        val cancelPendingIntent = PendingIntent.getService(
-            this,
-            0,
-            cancelIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Build notification with corrected intents
         val notification = NotificationCompat.Builder(this, COUNTDOWN_CHANNEL_ID)
             .setContentTitle("SOS Alert Countdown")
-            .setContentText("SOS will be sent in $secondsRemaining seconds. Tap to open app.")
+            .setContentText("SOS will be sent in $secondsRemaining seconds")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(contentPendingIntent) // Use ACTIVITY intent here
+            .setContentIntent(createActivityPendingIntent())
             .setProgress(10, secondsRemaining, false)
             .setOnlyAlertOnce(true)
             .setOngoing(true)
             .addAction(
-                android.R.drawable.ic_delete,
+                android.R.drawable.ic_delete, // System cancel icon
                 "Cancel SOS",
-                cancelPendingIntent // Service intent ONLY in action
+                createCancelPendingIntent()
             )
             .build()
 
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(SOS_NOTIFICATION_ID, notification)
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(SOS_NOTIFICATION_ID, notification)
     }
 
     private fun showSosCancelledNotification() {
-        // Create a notification to let the user know SOS was cancelled
         val notification = NotificationCompat.Builder(this, COUNTDOWN_CHANNEL_ID)
             .setContentTitle("SOS Alert Cancelled")
             .setContentText("Your SOS alert has been cancelled.")
@@ -305,95 +406,83 @@ class PowerButtonService : Service() {
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(SOS_NOTIFICATION_ID + 1, notification)
 
-        // Auto dismiss after 3 seconds
         CoroutineScope(Dispatchers.IO).launch {
-            kotlinx.coroutines.delay(3000)
+            delay(3000)
             notificationManager.cancel(SOS_NOTIFICATION_ID + 1)
         }
     }
 
-    // Original showSosTriggeredNotification method
     private fun showSosTriggeredNotification() {
-        // Create an emergency notification channel with higher priority
         val emergencyChannelId = "SosEmergencyChannel"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "SOS Emergency Alerts"
-            val desc = "High priority alerts when SOS is triggered"
-            val importance = NotificationManager.IMPORTANCE_HIGH
-            val channel = NotificationChannel(emergencyChannelId, name, importance).apply {
-                description = desc
-                setShowBadge(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                enableVibration(true)
-                enableLights(true)
-            }
-            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
+
+        // Create or get existing channel
+        val channel = NotificationChannel(
+            emergencyChannelId,
+            "SOS Emergency Alerts",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "High priority alerts when SOS is triggered"
+
+            // Sound configuration
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
+            setSound(Settings.System.DEFAULT_NOTIFICATION_URI, audioAttributes)
+
+            // Other important settings
+            enableVibration(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
-        // Create intent to open app when notification is tapped
-        val contentIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            action = "com.example.sos.SOS_TRIGGERED"
-        }
-        val contentPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            contentIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        // Register the channel
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(channel)
 
-        // Build the emergency notification
         val notification = NotificationCompat.Builder(this, emergencyChannelId)
-            .setContentTitle("SOS Alert Sent")
-            .setContentText("Emergency services have been notified. Tap to open app.")
+            .setContentTitle("SOS Alert Sent!")
+            .setContentText("Emergency services notified. Tap to open app.")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(contentPendingIntent)
-            .setFullScreenIntent(contentPendingIntent, true)  // This helps appear on lock screen
+            .setContentIntent(createActivityPendingIntent())
+            .setFullScreenIntent(createActivityPendingIntent(), true)
             .setAutoCancel(true)
-            .setOngoing(true)  // Makes notification persistent
+            .setOngoing(true)
             .addAction(
-                android.R.drawable.ic_menu_view,
+                android.R.drawable.ic_menu_view, // System open icon
                 "Open App",
-                contentPendingIntent
+                createActivityPendingIntent()
             )
             .build()
 
-        // Show the notification
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(SOS_NOTIFICATION_ID, notification)  // Use unique ID for emergency notification
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(SOS_NOTIFICATION_ID, notification)
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "SOS Service"
-            val descriptionText = "Keeps the SOS service running"
-            val importance = NotificationManager.IMPORTANCE_LOW
-            val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
-                description = descriptionText
-            }
-            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
-    }
 
-    private fun createNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+    private fun createActivityPendingIntent(): PendingIntent {
+        return PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                action = "com.example.sos.SOS_TRIGGERED"
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SOS Service Running")
-            .setContentText("Press power button 5 times quickly to send SOS")
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // Replace with appropriate icon
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
     }
+
+    private fun createCancelPendingIntent(): PendingIntent {
+        return PendingIntent.getService(
+            this, 0,
+            Intent(this, PowerButtonService::class.java).apply {
+                action = ACTION_CANCEL_SOS
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }

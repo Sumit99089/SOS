@@ -32,9 +32,9 @@
         </activity>
         <service
             android:name=".service.PowerButtonService"
+            android:foregroundServiceType="location"
             android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="location" />
+            android:exported="false" />
         <receiver
             android:name=".service.SosServiceRestartReceiver"
             android:enabled="true"
@@ -45,7 +45,7 @@
             </intent-filter>
         </receiver>
         <receiver
-            android:name=".service.SosCancelReceiver"
+            android:name=".service.CancelSosReceiver"
             android:enabled="true"
             android:exported="false">
             <intent-filter>

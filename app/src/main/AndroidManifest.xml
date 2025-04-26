@@ -44,11 +44,14 @@
                 <action android:name="com.example.sos.RESTART_SERVICE" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".service.SosCancelReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.sos.action.CANCEL_SOS" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
-
-
-
-
-

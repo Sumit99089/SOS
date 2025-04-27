@@ -1,5 +1,7 @@
 package com.example.sos.ui.navigation
 
+
+import RegistrationScreen
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -9,11 +11,9 @@ import com.example.sos.ui.screens.*
 @Composable
 fun SosNavHost() {
     val navController = rememberNavController()
-    NavHost(navController, startDestination = "home") {
+    NavHost(navController, startDestination = "register") {
         composable("login") { LoginScreen(navController) }
-        composable("register_email") { RegisterEmailScreen(navController) }
-        composable("register_name") { RegisterNameScreen(navController) }
-        composable("register_password") { RegisterPasswordScreen(navController) }
+        composable("register") { RegistrationScreen(navController) }
         composable("home") { HomeScreen(navController) }
     }
 }

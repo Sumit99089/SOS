@@ -312,9 +312,18 @@ class PowerButtonService : Service() {
     }
 
     private fun startSosCountdown() {
-//        cancelSosCountdown() // Cancel any existing countdown
+        // First check if a timer is already running
+        if (sosCountdownTimer != null) {
+            // Only cancel the timer without showing cancellation notification
+            sosCountdownTimer?.cancel()
+            sosCountdownTimer = null
 
-        showCountdownNotification(20) // Initial 10-second countdown
+            // Just remove the notification without showing "SOS Cancelled"
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .cancel(SOS_NOTIFICATION_ID)
+        }
+
+        showCountdownNotification(20) // Initial countdown
 
         sosCountdownTimer = object : CountDownTimer(COUNTDOWN_DURATION, COUNTDOWN_INTERVAL) {
             override fun onTick(millisUntilFinished: Long) {
@@ -327,9 +336,8 @@ class PowerButtonService : Service() {
             }
         }.start()
     }
-
+    
     private fun cancelSosCountdown() {
-        Log.d("cancelsos", "cancelSosCountdown")
         sosCountdownTimer?.cancel()
         sosCountdownTimer = null
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
